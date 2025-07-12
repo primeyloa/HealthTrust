@@ -1,54 +1,41 @@
+// Temporarily disable SDK import to test if it's causing the blank page
+// import { AlleAI } from 'alle-ai-sdk'
 import axios from 'axios'
 
-// Alle AI API Configuration
-const ALLE_AI_BASE_URL = import.meta.env.VITE_ALLE_AI_API_URL || 'https://api.alle-ai.com/v1'
+// Alle AI Configuration
 const ALLE_AI_API_KEY = import.meta.env.VITE_ALLE_AI_API_KEY
+const ALLE_AI_BASE_URL = import.meta.env.VITE_ALLE_AI_API_URL || 'https://api.alle-ai.com/api/v1'
 
-// Create Alle AI axios instance
-const alleAIClient = axios.create({
+// Initialize the official SDK (temporarily disabled)
+let alleAISDK = null
+/*
+try {
+  if (ALLE_AI_API_KEY) {
+    alleAISDK = new AlleAI({ apiKey: ALLE_AI_API_KEY })
+  }
+} catch (error) {
+  console.warn('Alle AI SDK initialization failed, using axios fallback:', error)
+}
+*/
+
+// Create axios fallback client
+const alleAIClient = ALLE_AI_API_KEY ? axios.create({
   baseURL: ALLE_AI_BASE_URL,
   timeout: 30000,
   headers: {
     'Content-Type': 'application/json',
-    'Authorization': `Bearer ${ALLE_AI_API_KEY}`,
+    'X-API-Key': ALLE_AI_API_KEY,
     'User-Agent': 'HealthTrust/1.0.0'
   }
+}) : null
+
+console.log('Alle AI Service initialized:', {
+  hasApiKey: !!ALLE_AI_API_KEY,
+  apiKey: ALLE_AI_API_KEY ? `${ALLE_AI_API_KEY.substring(0, 10)}...` : 'Not set',
+  hasSDK: !!alleAISDK,
+  hasClient: !!alleAIClient,
+  baseURL: ALLE_AI_BASE_URL
 })
-
-// Add request interceptor for logging
-alleAIClient.interceptors.request.use(
-  (config) => {
-    console.log('Alle AI Request:', {
-      url: config.url,
-      method: config.method,
-      data: config.data
-    })
-    return config
-  },
-  (error) => {
-    console.error('Alle AI Request Error:', error)
-    return Promise.reject(error)
-  }
-)
-
-// Add response interceptor for error handling
-alleAIClient.interceptors.response.use(
-  (response) => {
-    console.log('Alle AI Response:', {
-      status: response.status,
-      data: response.data
-    })
-    return response
-  },
-  (error) => {
-    console.error('Alle AI Response Error:', {
-      status: error.response?.status,
-      data: error.response?.data,
-      message: error.message
-    })
-    return Promise.reject(error)
-  }
-)
 
 /**
  * Alle AI Service for health-related AI interactions
@@ -61,104 +48,272 @@ export class AlleAIService {
    * @returns {Promise<Object>} AI response
    */
   static async sendChatMessage(message, options = {}) {
-    try {
-      // Alle AI specific payload format
-      const payload = {
-        model: options.model || 'gpt-4o',
-        messages: [
-          {
-            role: 'system',
-            content: `You are a health information AI assistant for HealthTrust, a platform dedicated to combating health misinformation. 
-
-Your role is to:
-1. Provide accurate, evidence-based health information
-2. Fact-check health claims and identify misinformation
-3. Cite reliable medical sources (CDC, WHO, NIH, peer-reviewed journals)
-4. Be clear about limitations and recommend consulting healthcare professionals
-5. Focus specifically on vaccines, public health initiatives, and medical research
-
-Always respond with:
-- Clear, factual information
-- Source citations when possible
-- Confidence level in your response
-- Warnings about misinformation when detected`
-          },
-          {
-            role: 'user',
-            content: message
-          }
-        ],
-        max_tokens: options.maxTokens || 500,
-        temperature: options.temperature || 0.7,
-        stream: false,
-        ...options.additionalParams
+    if (!alleAISDK && !alleAIClient) {
+      console.error('Alle AI service not initialized')
+      return {
+        success: false,
+        error: 'AI service not configured',
+        fallback: {
+          message: this.getFallbackResponse(message),
+          confidence: 0.6,
+          sources: ['HealthTrust Knowledge Base'],
+          verified: false,
+          timestamp: new Date().toISOString()
+        }
       }
+    }
 
-      console.log('Attempting Alle AI API call with payload:', payload)
-      
-      // Try Alle AI specific endpoints
-      const endpoints = ['/chat', '/v1/chat', '/chat/completions', '/v1/chat/completions']
+    try {
+      console.log('=== ALLE AI CHAT REQUEST ===')
+      console.log('Message:', message)
+      console.log('Using SDK:', !!alleAISDK)
+      console.log('Options:', options)
+
       let response = null
-      let lastError = null
 
-      for (const endpoint of endpoints) {
+      // Try SDK first if available
+      if (alleAISDK) {
         try {
-          console.log(`Trying Alle AI endpoint: ${endpoint}`)
-          response = await alleAIClient.post(endpoint, payload)
-          console.log(`Success with Alle AI endpoint: ${endpoint}`, response.data)
-          break
-        } catch (error) {
-          console.log(`Failed with endpoint ${endpoint}:`, error.response?.status, error.response?.data)
-          lastError = error
-          continue
+          console.log('🚀 Trying official Alle AI SDK...')
+          response = await alleAISDK.chat({
+            model: options.model || 'gpt-4o',
+            messages: [
+              {
+                role: 'system',
+                content: 'You are a helpful AI assistant for HealthTrust, focused on providing accurate, evidence-based health information. Always encourage users to consult healthcare professionals for medical advice.'
+              },
+              {
+                role: 'user',
+                content: message
+              }
+            ],
+            max_tokens: options.maxTokens || 500,
+            temperature: options.temperature || 0.7
+          })
+          
+          console.log('✅ SDK Response:', response)
+          
+          return {
+            success: true,
+            data: {
+              message: response.choices?.[0]?.message?.content || response.response || response.content || 'No response content',
+              confidence: 0.9,
+              sources: ['Alle AI SDK'],
+              verified: true,
+              timestamp: new Date().toISOString(),
+              model: response.model || 'gpt-4o'
+            }
+          }
+          
+        } catch (sdkError) {
+          console.warn('❌ SDK failed, trying axios fallback:', sdkError)
+          
+          // If SDK fails with credits error, return that immediately
+          if (sdkError.response?.status === 402 || sdkError.message?.includes('credit')) {
+            return {
+              success: false,
+              error: 'API Credits Required',
+              data: {
+                message: '💳 **Add Credits Required**: Your Alle AI account needs more credits. Please visit your Alle AI dashboard to add credits.',
+                confidence: 1.0,
+                sources: ['API Credit Check'],
+                verified: true,
+                timestamp: new Date().toISOString()
+              }
+            }
+          }
         }
       }
 
-      if (!response) {
-        throw lastError || new Error('All Alle AI endpoints failed')
+      // Fallback to axios client if SDK is not available or failed
+      if (alleAIClient && !response) {
+        console.log('🔄 Using axios fallback...')
+        
+        // Try multiple payload formats that Alle AI might accept
+        const payloadFormats = [
+          // Standard OpenAI format
+          {
+            model: options.model || 'gpt-4o',
+            messages: [
+              {
+                role: 'system',
+                content: 'You are a helpful AI assistant for HealthTrust, focused on providing accurate, evidence-based health information. Always encourage users to consult healthcare professionals for medical advice.'
+              },
+              {
+                role: 'user',
+                content: message
+              }
+            ],
+            max_tokens: options.maxTokens || 500,
+            temperature: options.temperature || 0.7
+          },
+          // Alternative format 1 - simpler structure
+          {
+            model: 'gpt-3.5-turbo',
+            prompt: message,
+            max_tokens: options.maxTokens || 500,
+            temperature: options.temperature || 0.7
+          },
+          // Alternative format 2 - different model names
+          {
+            model: 'gpt-4',
+            messages: [
+              {
+                role: 'user',
+                content: message
+              }
+            ],
+            max_tokens: options.maxTokens || 500
+          },
+          // Alternative format 3 - text completion style
+          {
+            prompt: `You are a health AI assistant. User asks: ${message}\n\nResponse:`,
+            max_tokens: options.maxTokens || 500,
+            temperature: options.temperature || 0.7
+          }
+        ]
+
+        // Try the correct endpoint with different payload formats
+        const endpoints = ['/chat/completions', '/completions', '/v1/chat/completions', '/api/v1/chat/completions']
+        let lastError = null
+
+        for (const payload of payloadFormats) {
+          for (const endpoint of endpoints) {
+            try {
+              console.log(`🎯 Trying: ${ALLE_AI_BASE_URL}${endpoint} with payload:`, JSON.stringify(payload, null, 2))
+              response = await alleAIClient.post(endpoint, payload)
+              console.log(`✅ Success with ${endpoint}:`, response.data)
+              
+              // If we get a successful response, break out of both loops
+              if (response.data) {
+                break
+              }
+            } catch (error) {
+              console.log(`❌ Failed ${endpoint}:`, error.response?.status, error.response?.data)
+              
+              // If it's a 402 error (insufficient credits), we found the right endpoint
+              if (error.response?.status === 402) {
+                console.log('🎯 Found correct endpoint but need credits!')
+                throw error // Re-throw to handle credits error properly
+              }
+              
+              lastError = error
+              continue
+            }
+          }
+          
+          // If we got a response, break out of payload loop
+          if (response) break
+        }
+
+        if (!response) {
+          throw lastError || new Error('All endpoint and payload combinations failed')
+        }
       }
-      
-      // Parse different possible response formats from Alle AI
+
+      // Parse response - handle Alle AI's specific response format
       const responseData = response.data
       let aiMessage = ''
       
-      if (responseData.choices && responseData.choices[0]?.message?.content) {
-        aiMessage = responseData.choices[0].message.content
-      } else if (responseData.response) {
-        aiMessage = responseData.response
-      } else if (responseData.text) {
-        aiMessage = responseData.text
-      } else if (responseData.content) {
-        aiMessage = responseData.content
-      } else if (typeof responseData === 'string') {
-        aiMessage = responseData
-      } else {
-        aiMessage = 'I apologize, but I couldn\'t generate a response at this time.'
-      }
+      console.log('🔍 Parsing response data:', responseData)
       
+      // Handle Alle AI's response structure
+      if (responseData.success && responseData.responses) {
+        if (responseData.responses.responses && responseData.responses.responses.length > 0) {
+          aiMessage = responseData.responses.responses[0].content || responseData.responses.responses[0].text || 'Response received but no content'
+        } else if (responseData.responses.length > 0) {
+          aiMessage = responseData.responses[0].content || responseData.responses[0].text || 'Response received but no content'
+        } else {
+          aiMessage = 'API responded successfully but returned empty response. This might indicate the model needs different parameters or your account needs configuration.'
+        }
+      }
+      // Handle OpenAI-compatible format (fallback)
+      else if (responseData.choices && responseData.choices[0]) {
+        aiMessage = responseData.choices[0].message?.content || responseData.choices[0].text || 'No response content'
+      } 
+      // Handle direct response field
+      else if (responseData.response) {
+        aiMessage = responseData.response
+      } 
+      // Handle content field
+      else if (responseData.content) {
+        aiMessage = responseData.content
+      } 
+      // Handle message field
+      else if (responseData.message) {
+        aiMessage = responseData.message
+      }
+      else {
+        aiMessage = `API Response: ${JSON.stringify(responseData, null, 2)}`
+      }
+
       return {
         success: true,
         data: {
           message: aiMessage,
-          confidence: responseData.confidence || 0.8,
+          confidence: responseData.confidence || (aiMessage.includes('API Response:') ? 0.3 : 0.8),
           sources: responseData.sources || ['Alle AI'],
           verified: responseData.verified || true,
           sessionId: responseData.session_id || options.sessionId,
           timestamp: new Date().toISOString(),
           usage: responseData.usage || null,
-          model: responseData.model || payload.model
+          model: responseData.model || options.model || 'gpt-4o',
+          rawResponse: responseData // Include raw response for debugging
         }
       }
     } catch (error) {
       console.error('Alle AI Chat Error:', error)
-      console.error('Error details:', {
-        status: error.response?.status,
-        statusText: error.response?.statusText,
-        data: error.response?.data,
-        message: error.message
-      })
       
-      // Return fallback response for development
+      // Check for specific API errors
+      if (error.response) {
+        const status = error.response.status
+        const apiError = error.response.data
+        
+        if (status === 402) {
+          return {
+            success: false,
+            error: 'API Credits Required',
+            data: {
+              message: '💳 **Add Credits Required**: Your Alle AI account needs more credits to process requests. Please visit your Alle AI dashboard to add credits and continue using the AI service.',
+              confidence: 1.0,
+              sources: ['API Credit Check'],
+              verified: true,
+              apiStatus: status,
+              apiError: apiError?.error?.message || 'Insufficient API credits',
+              creditsUrl: 'https://alle-ai.com/dashboard',
+              timestamp: new Date().toISOString()
+            }
+          }
+        } else if (status === 401) {
+          return {
+            success: false,
+            error: 'Authentication Error',
+            data: {
+              message: '🔑 **API Key Issue**: There seems to be an issue with your API key. Please check your Alle AI account and API key configuration.',
+              confidence: 1.0,
+              sources: ['API Authentication'],
+              verified: true,
+              apiStatus: status,
+              timestamp: new Date().toISOString()
+            }
+          }
+        } else if (status === 429) {
+          return {
+            success: false,
+            error: 'Rate Limit Exceeded',
+            data: {
+              message: '⏱️ **Rate Limit**: Too many requests. Please wait a moment before trying again.',
+              confidence: 1.0,
+              sources: ['API Rate Limit'],
+              verified: true,
+              apiStatus: status,
+              timestamp: new Date().toISOString()
+            }
+          }
+        }
+      }
+      
+      // Return fallback response
       return {
         success: false,
         error: error.message,
@@ -180,28 +335,54 @@ Always respond with:
    * @returns {Promise<Object>} Fact-check result
    */
   static async factCheckClaim(claim, options = {}) {
-    try {
-      const payload = {
-        claim: claim,
-        task: 'fact_check',
-        domain: 'health',
-        user_id: options.userId || 'anonymous',
-        return_sources: true,
-        return_evidence: true,
-        ...options.additionalParams
+    if (!alleAIClient) {
+      return {
+        success: false,
+        error: 'AI service not configured',
+        fallback: {
+          claim: claim,
+          verdict: 'UNCERTAIN',
+          confidence: 0.3,
+          explanation: 'Unable to fact-check this claim at this time. Please consult reliable medical sources.',
+          sources: ['CDC', 'WHO', 'NIH'],
+          evidence: [],
+          timestamp: new Date().toISOString()
+        }
       }
+    }
 
-      const response = await alleAIClient.post('/fact-check', payload)
+    try {
+      // Use SDK for fact-checking - this might need to be adapted based on SDK API
+      const response = await alleAIClient.factCheck ? 
+        await alleAIClient.factCheck({
+          claim: claim,
+          domain: 'health',
+          ...options.additionalParams
+        }) :
+        await alleAIClient.chat({
+          messages: [
+            {
+              role: 'system',
+              content: 'You are a health fact-checker. Analyze the given claim and provide a verdict (TRUE, FALSE, UNCERTAIN), confidence level, and explanation with sources.'
+            },
+            {
+              role: 'user',
+              content: `Please fact-check this health claim: "${claim}"`
+            }
+          ],
+          model: 'gpt-4o',
+          max_tokens: 300
+        })
       
       return {
         success: true,
         data: {
           claim: claim,
-          verdict: response.data.verdict || 'UNCERTAIN',
-          confidence: response.data.confidence || 0.5,
-          explanation: response.data.explanation || 'Unable to verify this claim.',
-          sources: response.data.sources || [],
-          evidence: response.data.evidence || [],
+          verdict: response.verdict || 'UNCERTAIN',
+          confidence: response.confidence || 0.5,
+          explanation: response.explanation || response.content || 'Unable to verify this claim.',
+          sources: response.sources || ['Alle AI'],
+          evidence: response.evidence || [],
           timestamp: new Date().toISOString()
         }
       }
@@ -356,7 +537,7 @@ Always respond with:
    * @returns {boolean} Whether the service is ready
    */
   static isConfigured() {
-    return !!(ALLE_AI_API_KEY && ALLE_AI_BASE_URL)
+    return !!(ALLE_AI_API_KEY && alleAIClient)
   }
 
   /**
@@ -370,50 +551,68 @@ Always respond with:
     }
 
     try {
-      // Try Alle AI specific health/status endpoints first
-      const healthEndpoints = ['/health', '/status', '/v1/health', '/v1/status']
+      console.log('🔍 Testing Alle AI connection...')
       
-      for (const endpoint of healthEndpoints) {
+      // Try SDK first if available
+      if (alleAISDK) {
         try {
-          const response = await alleAIClient.get(endpoint)
-          if (response.status === 200) {
-            console.log(`Alle AI accessible via ${endpoint}`)
+          console.log('🚀 Testing SDK connection...')
+          await alleAISDK.chat({
+            model: 'gpt-4o',
+            messages: [{ role: 'user', content: 'test' }],
+            max_tokens: 1
+          })
+          console.log('✅ SDK connection successful!')
+          return true
+        } catch (sdkError) {
+          console.warn('❌ SDK test failed:', sdkError.message)
+          
+          // If it's a credits error, connection works
+          if (sdkError.response?.status === 402 || sdkError.message?.includes('credit')) {
+            console.log('✅ SDK connection working (credits needed)')
             return true
           }
-        } catch {
-          // Continue to next endpoint
-          continue
         }
       }
       
-      // If health endpoints fail, try a minimal chat request to test auth
-      try {
+      // Fallback to axios client testing
+      if (alleAIClient) {
+        console.log('🔄 Testing axios client...')
+        
+        // Try a simple GET request first
+        try {
+          const healthResponse = await alleAIClient.get('/')
+          console.log('✅ Base endpoint success:', healthResponse.status)
+          return true
+        } catch {
+          console.log('Base endpoint failed, trying chat...')
+        }
+        
+        // Try a minimal chat request
         const testPayload = {
           model: 'gpt-4o',
           messages: [{ role: 'user', content: 'test' }],
-          max_tokens: 1,
-          stream: false
+          max_tokens: 1
         }
         
-        const response = await alleAIClient.post('/chat', testPayload)
-        if (response.status === 200) {
-          console.log('Alle AI accessible via chat endpoint test')
-          return true
-        }
-      } catch (chatError) {
-        console.log('Chat endpoint test result:', chatError.response?.status, chatError.response?.data)
-        
-        // A 402 (payment required) or 429 (rate limit) means the API is working but has usage limits
-        if (chatError.response?.status === 402 || chatError.response?.status === 429) {
-          console.log('Alle AI is accessible but has usage restrictions')
-          return true
-        }
+        const testResponse = await alleAIClient.post('/chat/completions', testPayload)
+        console.log('✅ Chat endpoint test successful:', testResponse.status)
+        return true
       }
       
-      console.warn('All Alle AI connection tests failed')
       return false
     } catch (error) {
-      console.warn('Alle AI API not accessible:', error.message)
+      console.warn('❌ Alle AI connection test failed:', error.message, error.response?.status)
+      
+      // Check if it's a usage/payment error (which means connection works)
+      if (error.response?.status === 402 || 
+          error.response?.status === 429 ||
+          error.message.includes('quota') || 
+          error.message.includes('payment')) {
+        console.log('Alle AI is accessible but has usage restrictions')
+        return true
+      }
+      
       return false
     }
   }

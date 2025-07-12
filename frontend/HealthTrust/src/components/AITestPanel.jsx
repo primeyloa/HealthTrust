@@ -53,20 +53,30 @@ const AITestPanel = () => {
       temperature: 0.7
     }
 
-    // Try multiple possible URL patterns for Alle AI
+    // Try multiple possible URL patterns for Alle AI - more comprehensive list
     const urlPatterns = [
+      `${baseUrl}/chat/completions`,
       `${baseUrl}/v1/chat/completions`,
       `${baseUrl}/api/v1/chat/completions`, 
-      `${baseUrl}/chat/completions`,
+      `${baseUrl}/openai/v1/chat/completions`,
       `${baseUrl}/chat`,
       `${baseUrl}/v1/chat`,
       `${baseUrl}/api/chat`,
-      `${baseUrl}/completions`
+      `${baseUrl}/completions`,
+      `${baseUrl}/v1/completions`,
+      `${baseUrl}/generate`,
+      // Try without /v1 in base URL
+      `https://api.alle-ai.com/chat/completions`,
+      `https://api.alle-ai.com/v1/chat/completions`,
+      `https://api.alle-ai.com/openai/chat/completions`,
+      // Alternative base URLs
+      `https://alle-ai.com/api/v1/chat/completions`,
+      `https://alle-ai.com/api/chat/completions`
     ]
 
     for (const url of urlPatterns) {
       try {
-        console.log(`Trying URL: ${url}`)
+        console.log(`🔄 Trying URL: ${url}`)
         
         const response = await axios.post(url, testPayload, {
           headers: {
@@ -74,10 +84,10 @@ const AITestPanel = () => {
             'Authorization': `Bearer ${apiKey}`,
             'User-Agent': 'HealthTrust/1.0.0'
           },
-          timeout: 30000
+          timeout: 10000
         })
 
-        console.log(`SUCCESS with ${url}:`, response.data)
+        console.log(`✅ SUCCESS with ${url}:`, response.data)
         setResponse({
           success: true,
           data: {
@@ -94,18 +104,203 @@ const AITestPanel = () => {
         return // Success, exit the function
         
       } catch (err) {
-        console.log(`Failed with ${url}:`, err.response?.status, err.response?.data)
+        const status = err.response?.status
+        const errorData = err.response?.data
+        
+        console.log(`❌ Failed with ${url}:`, {
+          status,
+          statusText: err.response?.statusText,
+          error: errorData?.error || err.message,
+          details: errorData
+        })
+        
+        // If it's a 401/403, the URL might be right but auth is wrong
+        if (status === 401 || status === 403) {
+          setError(`Authentication failed with ${url}. Check your API key.`)
+          setResponse({
+            success: false,
+            error: 'Authentication failed',
+            apiStatus: status,
+            apiError: errorData,
+            workingUrl: url
+          })
+          setLoading(false)
+          return
+        }
+        
+        // If it's a 402/429, API is working but has usage limits
+        if (status === 402 || status === 429) {
+          setResponse({
+            success: true,
+            data: {
+              message: 'API is working but has usage/rate limits. This means the connection is successful!',
+              confidence: 1.0,
+              sources: [`Working API endpoint: ${url}`],
+              verified: true
+            }
+          })
+          setLoading(false)
+          return
+        }
+        
         continue // Try next URL
       }
     }
 
     // If we get here, all URLs failed
-    setError('All API endpoint patterns failed. Check console for details.')
+    setError('All API endpoint patterns failed. Alle AI might be using a different API structure.')
     setResponse({
       success: false,
       error: 'All endpoint patterns failed',
-      testedUrls: urlPatterns
+      testedUrls: urlPatterns.length,
+      suggestion: 'Check Alle AI documentation for correct API endpoints'
     })
+    setLoading(false)
+  }
+
+  const exploreAPI = async () => {
+    setLoading(true)
+    setError(null)
+    setResponse(null)
+
+    const baseUrl = import.meta.env.VITE_ALLE_AI_API_URL
+    const apiKey = import.meta.env.VITE_ALLE_AI_API_KEY
+
+    console.log('=== API EXPLORATION ===')
+    
+    // Try to find API documentation or available endpoints
+    const explorationUrls = [
+      // Common API info endpoints
+      `${baseUrl}/`,
+      `${baseUrl}/docs`,
+      `${baseUrl}/v1/`,
+      `${baseUrl}/openapi.json`,
+      `${baseUrl}/swagger.json`,
+      `${baseUrl}/api-docs`,
+      `${baseUrl}/health`,
+      `${baseUrl}/status`,
+      `${baseUrl}/models`,
+      `${baseUrl}/v1/models`,
+      
+      // Try different base URLs
+      `https://api.alle-ai.com/`,
+      `https://api.alle-ai.com/v1/`,
+      `https://api.alle-ai.com/docs`,
+      `https://api.alle-ai.com/v1/models`,
+      `https://alle-ai.com/api/`,
+      `https://alle-ai.com/api/v1/`,
+      
+      // Test if it's OpenAI compatible
+      `${baseUrl}/v1/chat/completions`,
+      `https://api.alle-ai.com/v1/chat/completions`
+    ]
+
+    const findings = []
+
+    for (const url of explorationUrls) {
+      try {
+        console.log(`🔍 Exploring: ${url}`)
+        
+        const response = await axios.get(url, {
+          headers: {
+            'Authorization': `Bearer ${apiKey}`,
+            'User-Agent': 'HealthTrust/1.0.0',
+            'Accept': 'application/json'
+          },
+          timeout: 8000
+        })
+
+        findings.push({
+          url,
+          status: response.status,
+          data: response.data,
+          headers: response.headers,
+          success: true
+        })
+
+        console.log(`✅ Found endpoint: ${url}`, response.data)
+        
+        // If we find something useful, show it immediately
+        if (response.data && (
+          response.data.models || 
+          response.data.endpoints || 
+          response.data.documentation ||
+          response.data.version ||
+          response.status === 200
+        )) {
+          setResponse({
+            success: true,
+            data: {
+              message: `Found working endpoint: ${url}`,
+              confidence: 1.0,
+              sources: [url],
+              verified: true,
+              endpointData: response.data,
+              allFindings: findings
+            }
+          })
+        }
+
+      } catch (err) {
+        const status = err.response?.status
+        const data = err.response?.data
+        
+        findings.push({
+          url,
+          status,
+          error: err.message,
+          data,
+          success: false
+        })
+
+        console.log(`❌ Failed: ${url} (${status})`, data)
+        
+        // Check for specific errors that tell us something
+        if (status === 401 || status === 403) {
+          setResponse({
+            success: false,
+            data: {
+              message: `Authentication issue at ${url} - API might be working but needs different auth`,
+              confidence: 0.8,
+              sources: [url],
+              verified: false,
+              authError: data
+            }
+          })
+        } else if (status === 405) {
+          // Method not allowed - endpoint exists but wrong method
+          findings[findings.length - 1].note = 'Endpoint exists but requires different HTTP method'
+        }
+      }
+    }
+
+    // Summary of exploration
+    const workingEndpoints = findings.filter(f => f.success)
+    const authErrors = findings.filter(f => f.status === 401 || f.status === 403)
+
+    if (workingEndpoints.length === 0 && authErrors.length === 0) {
+      setError(`No working endpoints found. Explored ${findings.length} URLs.`)
+      setResponse({
+        success: false,
+        error: 'API exploration failed',
+        exploredUrls: findings.length,
+        findings: findings,
+        suggestion: 'Alle AI might use a completely different API structure or authentication method'
+      })
+    } else if (authErrors.length > 0) {
+      setResponse({
+        success: false,
+        data: {
+          message: `Found ${authErrors.length} endpoints with auth errors - API exists but auth method might be wrong`,
+          confidence: 0.7,
+          sources: authErrors.map(e => e.url),
+          verified: false,
+          authEndpoints: authErrors,
+          allFindings: findings
+        }
+      })
+    }
+
     setLoading(false)
   }
 
@@ -230,6 +425,21 @@ const AITestPanel = () => {
                 </>
               ) : (
                 'Test Direct API'
+              )}
+            </button>
+            
+            <button
+              onClick={exploreAPI}
+              disabled={loading}
+              className="bg-purple-600 text-white px-6 py-2 rounded-lg hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center"
+            >
+              {loading ? (
+                <>
+                  <Loader className="w-4 h-4 mr-2 animate-spin" />
+                  Exploring...
+                </>
+              ) : (
+                'Explore API'
               )}
             </button>
           </div>
