@@ -8,7 +8,7 @@ const Home = () => {
   return (
     <div>
       {/* Hero Section */}
-      <section className="hero">
+      <section className="hero margin-100px">
         <div className="container">
           <h1 className="hero-title">Combat Health Misinformation Together</h1>
           <p className="hero-subtitle">

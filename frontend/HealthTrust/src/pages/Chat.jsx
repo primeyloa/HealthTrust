@@ -25,9 +25,11 @@ const Chat = () => {
       {
         id: 1,
         type: 'ai',
-        content: "Hi! I'm your AI health assistant. I can help you fact-check health information, answer questions about vaccines, and provide evidence-based health guidance. What would you like to know?",
+        content: "Hi! I'm your AI health assistant powered by Alle AI. I can help you fact-check health information, answer questions about vaccines, detect misinformation, and provide evidence-based health guidance. Ask me anything about health topics and I'll provide verified, accurate information!",
         timestamp: new Date(),
-        verified: true
+        verified: true,
+        sources: ['Alle AI Knowledge Base'],
+        confidence: 1.0
       }
     ])
   }, [])
@@ -49,20 +51,34 @@ const Chat = () => {
     setError(null)
 
     try {
-      // Call AI service
-      const response = await apiService.chatWithAI(newMessage)
+      // Call Alle AI service with health context
+      const response = await apiService.ai.chat(newMessage, {
+        context: 'health_assistance',
+        includeFactCheck: true,
+        includeVerification: true
+      })
       
-      const aiMessage = {
-        id: Date.now() + 1,
-        type: 'ai',
-        content: response.data.message,
-        timestamp: new Date(),
-        verified: response.data.verified || false,
-        sources: response.data.sources || [],
-        confidence: response.data.confidence || null
-      }
+      if (response.success) {
+        const aiMessage = {
+          id: Date.now() + 1,
+          type: 'ai',
+          content: response.data.message,
+          timestamp: new Date(),
+          verified: response.data.verified || false,
+          sources: response.data.sources || [],
+          confidence: response.data.confidence || null,
+          factCheck: response.data.factCheck || null,
+          fallback: response.fallback || false
+        }
 
-      setMessages(prev => [...prev, aiMessage])
+        setMessages(prev => [...prev, aiMessage])
+        
+        if (response.fallback) {
+          setError('AI assistant is running in offline mode')
+        }
+      } else {
+        throw new Error('AI service returned error')
+      }
     } catch (err) {
       console.error('Error sending message:', err)
       
@@ -70,14 +86,14 @@ const Chat = () => {
       const fallbackMessage = {
         id: Date.now() + 1,
         type: 'ai',
-        content: "I'm having trouble connecting right now. Please try again in a moment, or check our community feed for verified health information.",
+        content: "I'm having trouble connecting to the AI service right now. Please try again in a moment, or check our community feed for verified health information.",
         timestamp: new Date(),
         verified: false,
         error: true
       }
 
       setMessages(prev => [...prev, fallbackMessage])
-      setError('Unable to connect to AI assistant')
+      setError('Unable to connect to Alle AI assistant')
     } finally {
       setLoading(false)
     }

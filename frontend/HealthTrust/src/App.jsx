@@ -7,6 +7,7 @@ import Chat from './pages/Chat'
 import Profile from './pages/Profile'
 import Login from './pages/Login'
 import Register from './pages/Register'
+import AITestPanel from './components/AITestPanel'
 import './App.css'
 
 function App() {
@@ -21,6 +22,7 @@ function App() {
             <Route path="/profile" element={<Profile />} />
             <Route path="/login" element={<Login />} />
             <Route path="/register" element={<Register />} />
+            <Route path="/ai-test" element={<AITestPanel />} />
           </Routes>
         </Layout>
       </Router>
